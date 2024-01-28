@@ -8,8 +8,8 @@ sksm = '5ebcea5ee37023ccb9fc2d2019f9d7737be85591ae8652ffa9ef0f4d37063b0e'
 file_key = "secret_file_key"
 
 '''
-Downloadshare
-Alice wants to share a file with Bob
+Uploadshare
+Alice wants to send an Uploadshare to Bob
 1. Step
 - Alice creates a random access_key, auth_token, choose a secret password and calculates the oprf input
 - Alice calculates the BlindedElement
@@ -27,7 +27,7 @@ blinded_element = oprf_alice.Blind()
 
 '''
 2. Step
-- Server creates a DonwloadUrl https://example.com/api/downloadurl/<access_key> and sends the url to bob via email
+- Server creates a UploadUrl https://example.com/api/uploadurl/<access_key> and sends the url to bob via email
 - Server stores the auth_token
 - Server calculates the evaluatedElement and sends it to Alice
 '''
@@ -38,17 +38,18 @@ evaluated_element = OPRF.BlindEvaluate(bytes.fromhex(sksm), blinded_element)
 
 '''
 3. Step
-- Alice calculates the output and uses it as secret key (download_share_key)
-- Alice encrypts the auth_token and the file_key using the download_share_key (here using Paseto v4). The Download File is encrypted with the file_key.
+- Alice calculates the output and uses it as secret key (upload_share_key)
+- Alice encrypts the auth_token and the file_key using the upload_share_key (here using Paseto v4, committing AEAD). The Upload File will be encrypted with the file_key.
 - Alice sends the password to Bob
-- Alice sends the encrypted auth_token and the file_key to the server
+- Alice sends the encrypted auth_token, file_key and upload_url to the server
 '''
-download_share_key = oprf_alice.Finalize(evaluated_element)
+upload_share_key = oprf_alice.Finalize(evaluated_element)
 
-payload = {'auth_token': auth_token.hex(),
+payload = {'upload_url': 'https://example.com/api/uploadurl/' + access_key.hex(),
+           'auth_token': auth_token.hex(),
            'file_key': file_key}
 
-paseto_key = Key.new(version=4, purpose="local", key=download_share_key)
+paseto_key = Key.new(version=4, purpose="local", key=upload_share_key)
 paseto = Paseto.new(include_iat=True)  # Default values are exp=0(not specified) and including_iat=False
 token = paseto.encode(
     paseto_key,
@@ -62,7 +63,7 @@ token = paseto.encode(
 
 '''
 4. Step
-- Bob calculates the BlindedElement using the password and the access_key from the Download URL
+- Bob calculates the BlindedElement using the password and the access_key from the Upload URL
 '''
 
 oprf_bob = OPRF(oprf_input)
@@ -73,7 +74,7 @@ blinded_element = oprf_bob.Blind()
 '''
 5. Step
 - Server calculates the evaluatedElement and sends it to Bob
-- Server sends the encrypted auth_token and the file_key to Bob
+- Server sends the encrypted auth_token, file_key, and upload_url to Bob
 '''
 
 evaluated_element = OPRF.BlindEvaluate(bytes.fromhex(sksm), blinded_element)
@@ -82,15 +83,16 @@ evaluated_element = OPRF.BlindEvaluate(bytes.fromhex(sksm), blinded_element)
 
 '''
 3. Step
-- Bob calculates the output and use it a secret key (download_share_key)
-- Bob decrypts the auth_token and the file_key using the download_share_key.
-- Bob downloads the encrypted file where he authenticates to the server with the auth_token
-- Bob decrypts the file with the file_key
+- Bob calculates the output and use it a secret key (upload_share_key)
+- Bob decrypts the auth_token, file_key and the upload_url using the upload_share_key.
+- Bob compares the upload url he received by e-mail with the upload_url he just decrypted
+- Bob encrypts the file with the file_key
+- Bob uploads the encrypted file where he authenticates to the server with the auth_token
 '''
 
-download_share_key = oprf_bob.Finalize(evaluated_element)
+upload_share_key = oprf_bob.Finalize(evaluated_element)
 
-paseto_key = Key.new(version=4, purpose="local", key=download_share_key)
+paseto_key = Key.new(version=4, purpose="local", key=upload_share_key)
 decoded = pyseto.decode(paseto_key, token, implicit_assertion=access_key, deserializer=json)
 
 print(decoded.payload)
