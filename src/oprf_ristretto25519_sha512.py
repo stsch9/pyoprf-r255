@@ -7,8 +7,9 @@ from pysodium import (crypto_core_ristretto255_scalar_random, crypto_core_ristre
                       crypto_scalarmult_ristretto255, crypto_core_ristretto255_scalar_reduce,
                       crypto_core_ristretto255_scalar_invert, crypto_core_ristretto255_scalar_mul,
                       crypto_core_ristretto255_scalar_sub, crypto_scalarmult_ristretto255_base,
-                      crypto_core_ristretto255_add)
-from src.utils import modeOPRF, modeVOPRF, CreateContextString, identifier, identity, generator, I2OSP, expand_message_xmd
+                      crypto_core_ristretto255_add, crypto_core_ristretto255_scalar_add)
+from src.utils import (modeOPRF, modeVOPRF, modePOPRF, CreateContextString, identifier, identity, generator, I2OSP,
+                       expand_message_xmd)
 
 
 class BaseOPRF(object):
@@ -202,6 +203,68 @@ class VOPRF(BaseOPRF):
 
         hashInput = \
             I2OSP(len(self._input), 2) + self._input + \
+            I2OSP(len(unblindedElement), 2) + unblindedElement + \
+            b"Finalize"
+
+        return hashlib.sha512(hashInput).digest()
+
+
+class POPRF(BaseOPRF):
+    def __init__(self, info: bytes):
+        super().__init__(modePOPRF)
+        self.info = info
+        self._input = b''
+        self.blind = b''
+        self.tweakedKey = b''
+        self.blindedElement = b''
+
+    def Blind(self, input: bytes, pkS: bytes) -> bytes:
+        self._input = input
+        framedInfo = b"Info" + I2OSP(len(self.info), 2) + self.info
+        m = self.HashToScalar(framedInfo)
+        T = crypto_scalarmult_ristretto255_base(m)
+        self.tweakedKey = crypto_core_ristretto255_add(T, pkS)
+        if self.tweakedKey == bytes.fromhex(identity):
+            raise ValueError('Invalid Input')
+
+        self.blind = crypto_core_ristretto255_scalar_random()
+        #self.blind = bytes.fromhex('64d37aed22a27f5191de1c1d69fadb899d8862b58eb4220029e036ec4c1f6706')
+        DST = b'HashToGroup-' + self.contextString
+        inputElement = crypto_core_ristretto255_from_hash(expand_message_xmd(self._input, DST, 64, hashlib.sha512))
+        if inputElement == bytes.fromhex(identity):
+            raise ValueError('Invalid Input')
+
+        self.blindedElement = crypto_scalarmult_ristretto255(self.blind, inputElement)
+        return self.blindedElement
+
+    def BlindEvaluate(self, skS: bytes, blindedElement: bytes) -> tuple[bytes, list]:
+        framedInfo = b"Info" + I2OSP(len(self.info), 2) + self.info
+        m = self.HashToScalar(framedInfo)
+        t = crypto_core_ristretto255_scalar_add(skS, m)
+        if t ==  32 * b'\x00':
+            raise Exception("Inverse Error")
+
+        evaluatedElement = crypto_scalarmult_ristretto255(t, blindedElement)
+
+        tweakedKey = crypto_scalarmult_ristretto255_base(t)
+        blindedElements = [blindedElement]
+        evaluatedElements = [evaluatedElement]
+        proof = self.GenerateProof(t, bytes.fromhex(generator), tweakedKey, blindedElements, evaluatedElements)
+
+        return evaluatedElement, proof
+
+    def Finalize(self, evaluatedElement: bytes, proof: list) -> bytes:
+        blindedElements = [self.blindedElement]
+        evaluatedElements = [evaluatedElement]
+        if not self.VerifyProof(bytes.fromhex(generator), self.tweakedKey, blindedElements, evaluatedElements, proof):
+            raise Exception("Verify Error")
+
+        unblindedElement = crypto_scalarmult_ristretto255(crypto_core_ristretto255_scalar_invert(self.blind),
+                                                          evaluatedElement)
+
+        hashInput = \
+            I2OSP(len(self._input), 2) + self._input + \
+            I2OSP(len(self.info), 2) + self.info + \
             I2OSP(len(unblindedElement), 2) + unblindedElement + \
             b"Finalize"
 
